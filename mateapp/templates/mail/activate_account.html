@@ -1,0 +1,9 @@
+{% load i18n %}
+{% autoescape off %}
+{% trans "Dear" %} {{ user }},
+
+{% trans "Please click on the link below to complete your registration at MateApp:" %}
+
+{{ protocol }}://localhost:3000/activate?uid={{ uid }}&token={{ token }}
+
+{% endautoescape %}
