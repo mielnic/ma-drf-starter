@@ -32,17 +32,29 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         response = super().post(request, *args, **kwargs)
         data = response.data
         access_token = data.get("access")
+        refresh_token = data.get("refresh")
         
-        # Set the token in a httponly cookie
+        # Set the access token in a HTTP-only cookie
         response.set_cookie(
             key='access_token',
             value=access_token,
-            httponly=True,  # This makes the cookie HTTP-only
-            max_age=3600,  # Set max age to whatever you deem suitable
-            samesite='Lax',  # Adjust if necessary
+            httponly=True,
+            max_age=3600,  # Set according ACCESS_TOKEN_LIFETIME jwt parameter in settings.py.
+            samesite='Lax',
+            secure=True,  # Use True in production for HTTPS
+        )
+
+        # Set the refresh token in a HTTP-only cookie
+        response.set_cookie(
+            key='refresh_token',
+            value=refresh_token,
+            httponly=True,
+            max_age=7 * 24 * 3600,  # Set according REFRESH_TOKEN_LIFETIME jwt parameter in settings.py.
+            samesite='Lax',
+            secure=True,  # Use True in production for HTTPS
         )
         
-        # Optionally, remove tokens from body response if you only want them via cookies
+        # Optionally, clear any token data from the response body
         response.data = {}
         
         return response
@@ -56,6 +68,7 @@ class UserRegistrationAPIView(APIView):
         if serializer.is_valid():
             user = serializer.save()
 
+            # Prepare de data for the confirmation email.
             current_site = get_current_site(request)
             mail_subject = _('Activate your user account.')
             message = render_to_string('mail/activate_account.html', {
@@ -67,6 +80,7 @@ class UserRegistrationAPIView(APIView):
             })
             email = EmailMessage(mail_subject, message, to=[user.email])
 
+            # Sends the confirmation email
             try:
                 email.send()
                 logger.info(f'USER REGISTRATION: registration initiated for {user.email}')
@@ -79,20 +93,24 @@ class UserRegistrationAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
 
-# Activate
+# Activate User
 
 class ActivateAPIView(APIView):
     def get(self, request, uidb64, token):
         User = get_user_model()
+
+        # We try to get the user from the from the uidb64
         try:
             uid = force_str(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
             user = None
 
+        # If succesful, we validate the token
         if user is not None and account_activation_token.check_token(user, token):
+            # If REGISTRATION_PARKING is True, user remains validated but inactive until other action is performed in the app logic.
             if settings.REGISTRATION_PARKING == False:
-                activeEnabled = checkUserCreationLimit()  # Ensure this function exists
+                activeEnabled = checkUserCreationLimit()  # Function that enforce user creation limit.
                 if activeEnabled:
                     user.is_active = True
                     user.save()
@@ -117,12 +135,15 @@ class ActivateAPIView(APIView):
 class PasswordResetRequestAPIView(APIView):
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
+
+        # We vaildate the email in the users database.
         if serializer.is_valid():
             user_email = serializer.validated_data['email']
             User = get_user_model()
             associated_user = User.objects.filter(email=user_email).first()
 
             if associated_user:
+                # We prepare the data for the password reset email.
                 mail_subject = _('Password Reset Request')
                 message = render_to_string('mail/password_reset.html', {
                     'user': associated_user.first_name,
@@ -132,6 +153,8 @@ class PasswordResetRequestAPIView(APIView):
                     'protocol': 'https' if request.is_secure() else 'http'
                 })
                 email = EmailMessage(mail_subject, message, to=[user_email])
+
+                # We try to send the password reset email.
                 try:
                     email.send()
                     logger.info(f'USER PASSWORD: password reset link issued to {associated_user.email}.')
@@ -159,12 +182,15 @@ class PasswordResetRequestAPIView(APIView):
 class PasswordResetConfirmAPIView(APIView):
     def post(self, request, uidb64, token):
         User = get_user_model()
+
+        # We try to get the user from the from the uidb64
         try:
             uid = force_str(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
             user = None
 
+        # If successful, we record the new password.
         if user is not None and account_activation_token.check_token(user, token):
             serializer = ChangePasswordSerializer(data=request.data)
 
